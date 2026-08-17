@@ -1,4 +1,4 @@
-# resume-renderer
+# pdf-renderer
 
 Deterministic resume to PDF compiler. You supply structured content; it owns every measurement (margins, leading, indents, date alignment, section spacing).
 
@@ -21,7 +21,7 @@ python --version
 ### 2. Project Structure
 
 ```
-resume-renderer/
+pdf-renderer/
 ├── render_resume.py
 ├── resume.json
 ├── requirements.txt
