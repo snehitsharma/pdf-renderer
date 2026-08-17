@@ -55,15 +55,15 @@ CONFIG = {
 
     "font": {
         # family name -> (regular, bold, italic, bold-italic) TTF paths
-        "family": "Caladea",
+        "family": "Carlito",
         # Bare filenames — resolved against search_dirs below, in order.
         # The bundled ./fonts folder wins, so the repo is self-contained and
         # renders identically on Windows, macOS, Linux and Docker.
         "paths": {
-            "regular": "Caladea-Regular.ttf",
-            "bold": "Caladea-Bold.ttf",
-            "italic": "Caladea-Italic.ttf",
-            "boldItalic": "Caladea-BoldItalic.ttf",
+            "regular": "Carlito-Regular.ttf",
+            "bold": "Carlito-Bold.ttf",
+            "italic": "Carlito-Italic.ttf",
+            "boldItalic": "Carlito-BoldItalic.ttf",
         },
         "search_dirs": [
             os.path.join(_HERE, "fonts"),          # bundled with this script
@@ -83,7 +83,7 @@ CONFIG = {
         "name":          {"size": 19.0, "leading": 22.0, "tracking": 1.4},
         "headline":      {"size": 9.5,  "leading": 12.0, "tracking": 0.0},
         "contact":       {"size": 9.5,  "leading": 12.0, "tracking": 0.0},
-        "section":       {"size": 10.5, "leading": 12.5, "tracking": 0.9},
+        "section":       {"size": 11.5, "leading": 13.5, "tracking": 0.9},
         "entry":         {"size": 10.0, "leading": 12.4, "tracking": 0.0},
         "dates":         {"size": 10.0, "leading": 12.4, "tracking": 0.0},
         "stack":         {"size": 9.5,  "leading": 11.8, "tracking": 0.0},
@@ -790,6 +790,8 @@ def render_once(data, cfg, fonts, out_stream, scale, font_delta):
         bottomMargin=m["margin_bottom"],
         title=data["header"]["name"],
         author=data["header"]["name"],
+        creator=data["header"]["name"],
+        producer=data["header"]["name"],
     )
     frame = Frame(
         m["margin_left"], m["margin_bottom"],
