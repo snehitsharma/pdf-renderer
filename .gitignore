@@ -6,6 +6,10 @@ __pycache__/
 # Generated output files
 *.pdf
 
+# Prompts & templates
+prompts/
+resume-pdf/prompts/
+
 # Virtual environments
 .venv/
 venv/

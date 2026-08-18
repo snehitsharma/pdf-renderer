@@ -1,18 +1,3 @@
-#!/usr/bin/env python3
-"""
-render_resume.py — deterministic resume PDF renderer.
-
-No LLM. No generation. It takes structured content (resume.json) and lays it out
-with one single source of truth for every measurement (the CONFIG block below).
-
-Usage:
-    python render_resume.py resume.json -o Snehit-Sharma-Resume.pdf
-    python render_resume.py resume.json --no-fit      # disable auto-fit-to-one-page
-    python render_resume.py resume.json --pages 2     # allow a 2-page target
-"""
-
-import argparse
-import copy
 import io
 import json
 import os
@@ -36,137 +21,6 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
-
-_HERE = os.path.dirname(os.path.abspath(__file__))
-
-# ==========================================================================
-#  CONFIG — every measurement lives here. Change a number, rebuild, done.
-#  All units are PDF points (1 pt = 1/72 inch).
-# ==========================================================================
-
-CONFIG = {
-    "page": {
-        "size": "A4",             # "A4" or "LETTER"
-        "margin_left": 45,        # 0.625"
-        "margin_right": 45,
-        "margin_top": 40,
-        "margin_bottom": 36,
-    },
-
-    "font": {
-        # family name -> (regular, bold, italic, bold-italic) TTF paths
-        "family": "Carlito",
-        # Bare filenames — resolved against search_dirs below, in order.
-        # The bundled ./fonts folder wins, so the repo is self-contained and
-        # renders identically on Windows, macOS, Linux and Docker.
-        "paths": {
-            "regular": "Carlito-Regular.ttf",
-            "bold": "Carlito-Bold.ttf",
-            "italic": "Carlito-Italic.ttf",
-            "boldItalic": "Carlito-BoldItalic.ttf",
-        },
-        "search_dirs": [
-            os.path.join(_HERE, "fonts"),          # bundled with this script
-            os.path.join(_HERE, "font"),           # bundled as 'font'
-            os.path.join(os.getcwd(), "fonts"),    # ./fonts in the working dir
-            os.path.join(os.getcwd(), "font"),
-            "/usr/share/fonts/truetype/crosextra", # Linux system install
-            "/usr/share/fonts/truetype",
-            "C:/Windows/Fonts",                    # Windows system install
-            "/Library/Fonts",                      # macOS
-            os.path.expanduser("~/.fonts"),
-        ],
-    },
-
-    "type": {
-        # element        size  leading  tracking
-        "name":          {"size": 19.0, "leading": 22.0, "tracking": 1.4},
-        "headline":      {"size": 9.5,  "leading": 12.0, "tracking": 0.0},
-        "contact":       {"size": 9.5,  "leading": 12.0, "tracking": 0.0},
-        "section":       {"size": 11.5, "leading": 13.5, "tracking": 0.9},
-        "entry":         {"size": 10.0, "leading": 12.4, "tracking": 0.0},
-        "dates":         {"size": 10.0, "leading": 12.4, "tracking": 0.0},
-        "stack":         {"size": 9.5,  "leading": 11.8, "tracking": 0.0},
-        "bullet":        {"size": 10.0, "leading": 12.6, "tracking": 0.0},
-        "skills":        {"size": 10.0, "leading": 12.8, "tracking": 0.0},
-    },
-
-    # ONE accent colour, used for the name, section headings, rules and links.
-    # Body text stays black — that is the ATS-safe / high-contrast combination.
-    "accent": "#1F4E79",
-
-    "color": {
-        "name":      "@accent",
-        "headline":  "#333333",
-        "contact":   "#333333",
-        "section":   "@accent",
-        "body":      "#000000",
-        "entry":     "#000000",
-        "dates":     "#333333",
-        "stack":     "#444444",
-        "link":      "@accent",
-        "rule":      "@accent",
-    },
-
-    "spacing": {
-        # --- header ---
-        "name_after": 3.0,
-        "headline_after": 2.5,
-        "contact_after": 10.0,
-
-        # --- section headings ---
-        "section_before": 9.0,     # gap above a section heading
-        "heading_to_rule": 2.0,    # heading baseline gap to its rule
-        "rule_to_content": 4.5,    # rule to first entry
-        "rule_thickness": 0.7,
-
-        # --- entries ---
-        "entry_to_bullets": 1.5,   # header line -> first bullet
-        "between_bullets": 2.0,
-        "between_entries": 6.5,    # last bullet of entry -> next entry header
-        "between_edu_entries": 2.5,
-
-        # --- projects ---
-        "project_title_to_stack": 1.0,
-        "stack_to_bullets": 2.0,
-        "between_projects": 6.5,
-
-        # --- skills ---
-        "between_skill_rows": 1.5,
-    },
-
-    "bullets": {
-        "char": "\u2022",
-        "indent": 8.0,        # x of the bullet glyph, relative to left margin
-        "text_indent": 19.0,  # x where text starts (hanging indent for wraps)
-        "justify": False,     # True = justified body text, False = ragged right
-    },
-
-    "dates": {
-        "min_col_width": 92.0,   # right-hand date column
-        "gutter": 10.0,          # min gap between left text and date column
-    },
-
-    "autofit": {
-        "enabled": True,
-        "target_pages": 1,
-        # each pass multiplies all spacing + leading by this, down to floor
-        "step": 0.94,
-        "floor": 0.72,
-        # if spacing alone can't do it, shrink body sizes by this many points
-        "font_shrink_steps": [0.0, 0.25, 0.5],
-        # --fill: if content is short, grow spacing (never fonts) to balance
-        # the page instead of leaving a block of dead space at the bottom.
-        "fill_enabled": False,
-        "fill_ceiling": 1.9,
-        "fill_step": 1.03,
-    },
-}
-
-# ==========================================================================
-#  FONT REGISTRATION
-# ==========================================================================
-
 
 def _find_font(path, filename, search_dirs):
     if os.path.exists(path):
@@ -263,178 +117,6 @@ def link(text, url, color):
     return f'<link href="{esc(url)}" color="{color}"><u>{esc(text)}</u></link>'
 
 
-
-# ==========================================================================
-#  PLAIN-TEXT CONTENT PARSER
-#  Cheaper for an AI to emit than JSON (no braces, quotes, or repeated keys)
-#  and far easier to hand-edit. Same data model.
-#
-#      NAME: ...
-#      HEADLINE: ...
-#      CONTACT: item | item <url> | item
-#
-#      # EDUCATION
-#      @ Institution | Degree | GPA :: Jan 2023 - Dec 2024
-#
-#      # EXPERIENCE
-#      @ Title | Company | Location :: Feb 2025 - Present
-#      - bullet text
-#
-#      # PROJECTS
-#      @ Project Name (note) | github <https://...>
-#      ~ Tech . Tech . Tech
-#      - bullet text
-#
-#      # SKILLS
-#      Label: comma, separated, items
-# ==========================================================================
-
-_URL_IN_ANGLE = re.compile(r"^(.*?)\s*<([^>]+)>\s*$")
-
-_SECTION_ALIASES = {
-    "education": "education",
-    "work experience": "experience",
-    "experience": "experience",
-    "projects": "projects",
-    "project": "projects",
-    "technical skills": "skills",
-    "skills": "skills",
-}
-
-
-def _split_link(token):
-    """'GitHub <https://x>' -> ('GitHub', 'https://x')"""
-    m = _URL_IN_ANGLE.match(token.strip())
-    if m:
-        return m.group(1).strip(), m.group(2).strip()
-    return token.strip(), None
-
-
-def parse_text(raw):
-    data = {"header": {"contact": []}, "education": [], "experience": [],
-            "projects": [], "skills": []}
-    section = None
-    entry = None
-
-    for lineno, line in enumerate(raw.splitlines(), 1):
-        line = line.rstrip()
-        if not line.strip() or line.lstrip().startswith("//"):
-            continue
-        stripped = line.strip()
-
-        # ---- section marker ----
-        if stripped.startswith("#"):
-            key = stripped.lstrip("#").strip().lower()
-            if key not in _SECTION_ALIASES:
-                raise ValueError(f"line {lineno}: unknown section '{key}'")
-            section = _SECTION_ALIASES[key]
-            entry = None
-            continue
-
-        # ---- header fields ----
-        upper = stripped.split(":", 1)[0].strip().upper()
-        if section is None and upper in ("NAME", "HEADLINE", "CONTACT"):
-            value = stripped.split(":", 1)[1].strip()
-            if upper == "NAME":
-                data["header"]["name"] = value
-            elif upper == "HEADLINE":
-                data["header"]["headline"] = value
-            else:
-                for tok in value.split("|"):
-                    text, url = _split_link(tok)
-                    if text:
-                        item = {"text": text}
-                        if url:
-                            item["url"] = url
-                        data["header"]["contact"].append(item)
-            continue
-
-        if section is None:
-            raise ValueError(f"line {lineno}: content before any '# SECTION' marker")
-
-        # ---- skills rows ----
-        if section == "skills":
-            if ":" not in stripped:
-                raise ValueError(f"line {lineno}: skills row needs 'Label: items'")
-            label, items = stripped.split(":", 1)
-            data["skills"].append({"label": label.strip(), "items": items.strip()})
-            continue
-
-        # ---- entry header ----
-        if stripped.startswith("@"):
-            body = stripped[1:].strip()
-            dates = ""
-            if "::" in body:
-                body, dates = [x.strip() for x in body.split("::", 1)]
-            fields = [f.strip() for f in body.split("|")]
-
-            if section == "education":
-                entry = {"institution": fields[0]}
-                if len(fields) > 1 and fields[1]:
-                    entry["detail"] = fields[1]
-                if len(fields) > 2 and fields[2]:
-                    entry["extra"] = fields[2]
-                if dates:
-                    entry["dates"] = dates
-                data["education"].append(entry)
-
-            elif section == "experience":
-                entry = {"title": fields[0], "bullets": []}
-                if len(fields) > 1 and fields[1]:
-                    entry["company"] = fields[1]
-                if len(fields) > 2 and fields[2]:
-                    entry["location"] = fields[2]
-                if dates:
-                    entry["dates"] = dates
-                data["experience"].append(entry)
-
-            else:  # projects
-                name = fields[0]
-                note = None
-                m = re.match(r"^(.*?)\s*\((.+)\)\s*$", name)
-                if m:
-                    name, note = m.group(1).strip(), m.group(2).strip()
-                entry = {"name": name, "bullets": []}
-                if note:
-                    entry["note"] = note
-                if len(fields) > 1 and fields[1]:
-                    text, url = _split_link(fields[1])
-                    entry["link"] = {"text": text, "url": url}
-                data["projects"].append(entry)
-            continue
-
-        # ---- tech stack line ----
-        if stripped.startswith("~"):
-            if entry is None:
-                raise ValueError(f"line {lineno}: '~' stack line before any '@' entry")
-            entry["stack"] = stripped[1:].strip()
-            continue
-
-        # ---- bullet ----
-        if stripped.startswith(("-", "*", "\u2022")):
-            if entry is None:
-                raise ValueError(f"line {lineno}: bullet before any '@' entry")
-            entry.setdefault("bullets", []).append(stripped[1:].strip())
-            continue
-
-        raise ValueError(f"line {lineno}: unrecognised line -> {stripped[:50]!r}")
-
-    for k in ("education", "experience", "projects", "skills"):
-        if not data[k]:
-            data.pop(k)
-    return data
-
-
-def load_content(path):
-    with open(path, "r", encoding="utf-8") as f:
-        raw = f.read()
-    low = path.lower()
-    if low.endswith(".json"):
-        return json.loads(raw)
-    if low.endswith((".yaml", ".yml")):
-        import yaml
-        return yaml.safe_load(raw)
-    return parse_text(raw)
 
 
 # ==========================================================================
@@ -806,7 +488,7 @@ def render_once(data, cfg, fonts, out_stream, scale, font_delta):
     return doc.page  # number of pages produced
 
 
-def render(data, cfg, out_path):
+def render_to_bytes(data, cfg):
     resolve_accent(cfg)
     fonts = register_fonts(cfg)
     af = cfg["autofit"]
@@ -850,45 +532,13 @@ def render(data, cfg, out_path):
             s_try, blob, pages = nxt, buf.getvalue(), n
         scale = s_try
 
+    return blob, pages, scale, fd
+
+
+def render(data, cfg, out_path):
+    blob, pages, scale, fd = render_to_bytes(data, cfg)
     with open(out_path, "wb") as f:
         f.write(blob)
     print(f"  wrote {out_path}")
     print(f"  pages={pages}  spacing_scale={scale:.3f}  font_delta=-{fd}pt")
     return out_path
-
-
-# ==========================================================================
-#  CLI
-# ==========================================================================
-
-
-def main():
-    ap = argparse.ArgumentParser(description="Deterministic resume PDF renderer")
-    ap.add_argument("content", help="path to content file (.txt, .json or .yaml)")
-    ap.add_argument("-o", "--out", default="resume.pdf")
-    ap.add_argument("--no-fit", action="store_true", help="disable auto-fit")
-    ap.add_argument("--pages", type=int, default=1, help="target page count")
-    ap.add_argument("--size", choices=["A4", "LETTER"], default=None)
-    ap.add_argument("--accent", default=None, help="accent hex, e.g. #1F4E79")
-    ap.add_argument("--fill", action="store_true",
-                    help="expand spacing to balance a short resume on the page")
-    args = ap.parse_args()
-
-    data = load_content(args.content)
-
-    cfg = copy.deepcopy(CONFIG)
-    if args.no_fit:
-        cfg["autofit"]["enabled"] = False
-    cfg["autofit"]["target_pages"] = args.pages
-    if args.size:
-        cfg["page"]["size"] = args.size
-    if args.accent:
-        cfg["accent"] = args.accent
-    if args.fill:
-        cfg["autofit"]["fill_enabled"] = True
-
-    render(data, cfg, args.out)
-
-
-if __name__ == "__main__":
-    main()
