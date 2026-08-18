@@ -23,10 +23,13 @@ CONFIG = {
             "boldItalic": "Carlito-BoldItalic.ttf",
         },
         "search_dirs": [
+            os.path.join(_PROJECT_ROOT, "assets", "font"),
+            os.path.join(_PROJECT_ROOT, "assets", "fonts"),
             os.path.join(_PROJECT_ROOT, "fonts"),
             os.path.join(_PROJECT_ROOT, "font"),
             os.path.join(_HERE, "fonts"),
             os.path.join(_HERE, "font"),
+            os.path.join(os.getcwd(), "assets", "font"),
             os.path.join(os.getcwd(), "fonts"),
             os.path.join(os.getcwd(), "font"),
             "/usr/share/fonts/truetype/crosextra",

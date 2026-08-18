@@ -12,9 +12,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from config import CONFIG
-from parser import parse_text
-from renderer import render_to_bytes
+from core.config import CONFIG
+from models.resume import ResumeData
+from services.parser import parse_text
+from services.renderer import render_to_bytes
 
 app = FastAPI(
     title="Resume PDF Renderer API",
@@ -78,7 +79,7 @@ def health_check():
     },
 )
 def render_json(
-    resume_data: Dict[str, Any],
+    resume_data: ResumeData,
     accent: Optional[str] = Query(None, description="Custom accent hex color, e.g. #1F4E79"),
     size: Optional[str] = Query("A4", description="Page size: A4 or LETTER"),
     pages: int = Query(1, description="Target page count"),
@@ -86,17 +87,12 @@ def render_json(
     no_fit: bool = Query(False, description="Disable autofit page scaling"),
 ):
     """Compile JSON resume data directly into a PDF binary stream."""
-    if not isinstance(resume_data, dict) or "header" not in resume_data:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid resume JSON schema. Must contain a 'header' dictionary.",
-        )
-
     try:
+        data_dict = resume_data.model_dump()
         cfg = _prepare_config(accent=accent, size=size, pages=pages, fill=fill, no_fit=no_fit)
-        pdf_bytes, page_count, scale, font_delta = render_to_bytes(resume_data, cfg)
+        pdf_bytes, page_count, scale, font_delta = render_to_bytes(data_dict, cfg)
 
-        filename = f"{resume_data.get('header', {}).get('name', 'Resume').replace(' ', '_')}.pdf"
+        filename = f"{data_dict.get('header', {}).get('name', 'Resume').replace(' ', '_')}.pdf"
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",

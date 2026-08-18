@@ -9,9 +9,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from config import CONFIG
-from parser import load_content
-from renderer import render
+from core.config import CONFIG
+from services.parser import load_content
+from services.renderer import render
 
 
 def main():
