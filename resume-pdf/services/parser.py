@@ -1,149 +1,89 @@
 import json
-import re
+import os
+import yaml
 
-_URL_IN_ANGLE = re.compile(r"^(.*?)\s*<([^>]+)>\s*$")
+import instructor
+from openai import OpenAI
+from pydantic import ValidationError
 
-_SECTION_ALIASES = {
-    "education": "education",
-    "work experience": "experience",
-    "experience": "experience",
-    "projects": "projects",
-    "project": "projects",
-    "technical skills": "skills",
-    "skills": "skills",
-}
+from models.resume import ResumeData
 
 
-def _split_link(token):
-    """'GitHub <https://x>' -> ('GitHub', 'https://x')"""
-    m = _URL_IN_ANGLE.match(token.strip())
-    if m:
-        return m.group(1).strip(), m.group(2).strip()
-    return token.strip(), None
+def load_content_from_text(raw: str, filename: str = ""):
+    """
+    Tries to turn raw text into a dict based on JSON or YAML structure.
+    Returns None if it's unstructured plain text.
+    """
+    low = filename.lower()
+
+    if low.endswith((".yaml", ".yml")):
+        try:
+            parsed = yaml.safe_load(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
 
 
-def parse_text(raw):
-    data = {"header": {"contact": []}, "education": [], "experience": [],
-            "projects": [], "skills": []}
-    section = None
-    entry = None
-
-    for lineno, line in enumerate(raw.splitlines(), 1):
-        line = line.rstrip()
-        if not line.strip() or line.lstrip().startswith("//"):
-            continue
-        stripped = line.strip()
-
-        # ---- section marker ----
-        if stripped.startswith("#"):
-            key = stripped.lstrip("#").strip().lower()
-            if key not in _SECTION_ALIASES:
-                raise ValueError(f"line {lineno}: unknown section '{key}'")
-            section = _SECTION_ALIASES[key]
-            entry = None
-            continue
-
-        # ---- header fields ----
-        upper = stripped.split(":", 1)[0].strip().upper()
-        if section is None and upper in ("NAME", "HEADLINE", "CONTACT"):
-            value = stripped.split(":", 1)[1].strip()
-            if upper == "NAME":
-                data["header"]["name"] = value
-            elif upper == "HEADLINE":
-                data["header"]["headline"] = value
-            else:
-                for tok in value.split("|"):
-                    text, url = _split_link(tok)
-                    if text:
-                        item = {"text": text}
-                        if url:
-                            item["url"] = url
-                        data["header"]["contact"].append(item)
-            continue
-
-        if section is None:
-            raise ValueError(f"line {lineno}: content before any '# SECTION' marker")
-
-        # ---- skills rows ----
-        if section == "skills":
-            if ":" not in stripped:
-                raise ValueError(f"line {lineno}: skills row needs 'Label: items'")
-            label, items = stripped.split(":", 1)
-            data["skills"].append({"label": label.strip(), "items": items.strip()})
-            continue
-
-        # ---- entry header ----
-        if stripped.startswith("@"):
-            body = stripped[1:].strip()
-            dates = ""
-            if "::" in body:
-                body, dates = [x.strip() for x in body.split("::", 1)]
-            fields = [f.strip() for f in body.split("|")]
-
-            if section == "education":
-                entry = {"institution": fields[0]}
-                if len(fields) > 1 and fields[1]:
-                    entry["detail"] = fields[1]
-                if len(fields) > 2 and fields[2]:
-                    entry["extra"] = fields[2]
-                if dates:
-                    entry["dates"] = dates
-                data["education"].append(entry)
-
-            elif section == "experience":
-                entry = {"title": fields[0], "bullets": []}
-                if len(fields) > 1 and fields[1]:
-                    entry["company"] = fields[1]
-                if len(fields) > 2 and fields[2]:
-                    entry["location"] = fields[2]
-                if dates:
-                    entry["dates"] = dates
-                data["experience"].append(entry)
-
-            else:  # projects
-                name = fields[0]
-                note = None
-                m = re.match(r"^(.*?)\s*\((.+)\)\s*$", name)
-                if m:
-                    name, note = m.group(1).strip(), m.group(2).strip()
-                entry = {"name": name, "bullets": []}
-                if note:
-                    entry["note"] = note
-                if len(fields) > 1 and fields[1]:
-                    text, url = _split_link(fields[1])
-                    entry["link"] = {"text": text, "url": url}
-                data["projects"].append(entry)
-            continue
-
-        # ---- tech stack line ----
-        if stripped.startswith("~"):
-            if entry is None:
-                raise ValueError(f"line {lineno}: '~' stack line before any '@' entry")
-            entry["stack"] = stripped[1:].strip()
-            continue
-
-        # ---- bullet ----
-        if stripped.startswith(("-", "*", "\u2022")):
-            if entry is None:
-                raise ValueError(f"line {lineno}: bullet before any '@' entry")
-            entry.setdefault("bullets", []).append(stripped[1:].strip())
-            continue
-
-        raise ValueError(f"line {lineno}: unrecognised line -> {stripped[:50]!r}")
-
-    for k in ("education", "experience", "projects", "skills"):
-        if not data[k]:
-            data.pop(k)
-    return data
-
-
-def load_content(path):
+def load_content(path: str):
+    """Utility to read file from disk path."""
     with open(path, "r", encoding="utf-8") as f:
         raw = f.read()
-    low = path.lower()
-    if low.endswith(".json"):
-        return json.loads(raw)
-    if low.endswith((".yaml", ".yml")):
-        import yaml
-        return yaml.safe_load(raw)
+    return load_content_from_text(raw, path)
+
+
+def parse_text(raw: str) -> ResumeData:
+    """
+    Sends raw text to Groq LLM via instructor to extract ResumeData.
+    instructor automatically enforces the schema and handles retries.
+    """
+    client = instructor.from_openai(
+        OpenAI(
+            base_url="https://api.groq.com/openai/v1",
+            api_key=os.environ.get("GROQ_API_KEY", ""),
+        ),
+        mode=instructor.Mode.MD_JSON,
+    )
+    llm_model = os.environ.get("PARSE_LLM_MODEL", "groq/compound-mini")
+
+    return client.chat.completions.create(
+        model=llm_model,
+        response_model=ResumeData,
+        max_tokens=3000,
+        max_retries=3,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Extract resume information from the user's text and "
+                    "structure it according to the required schema. If a "
+                    "field isn't present in the input, omit it or use a "
+                    "sensible empty value rather than inventing content."
+                ),
+            },
+            {"role": "user", "content": raw},
+        ],
+    )
+
+
+def parse_and_validate(raw: str, filename: str = "") -> ResumeData:
+    """
+    Unified entry point:
+    1. Try structural JSON/YAML parse first.
+    2. If valid ResumeData dict, return ResumeData(**parsed).
+    3. If unstructured text or malformed JSON, pass to LLM parser (parse_text).
+    """
+    parsed = load_content_from_text(raw, filename)
+
+    if parsed is not None:
+        try:
+            return ResumeData(**parsed)
+        except ValidationError:
+            pass  # Fallback to LLM extraction
+
     return parse_text(raw)

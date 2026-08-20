@@ -9,6 +9,13 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"))
+except ImportError:
+    pass
+
 from core.config import CONFIG
 from services.parser import load_content
 from services.renderer import render

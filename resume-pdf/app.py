@@ -1,20 +1,28 @@
 import copy
+import json
 import os
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 # Ensure package directory is on sys.path
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"))
+except ImportError:
+    pass
+
 from core.config import CONFIG
 from models.resume import ResumeData
-from services.parser import parse_text
+from services.parser import parse_and_validate
 from services.renderer import render_to_bytes
 
 app = FastAPI(
@@ -77,22 +85,64 @@ def health_check():
             "description": "Returns the generated PDF binary stream.",
         }
     },
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "text/plain": {
+                    "schema": {
+                        "type": "string",
+                        "description": "Paste any unquoted raw text, JSON, or YAML resume content here",
+                        "example": "Hey team, here is my background info: Name's David Miller, email david.m@gmail.com, located in Austin TX. Staff AI Engineer at Tesla (2022 - Present)."
+                    }
+                },
+                "application/json": {
+                    "schema": {
+                        "type": "string",
+                        "description": "Paste any unquoted raw text, JSON, or YAML resume content here",
+                        "example": "Hey team, here is my background info: Name's David Miller, email david.m@gmail.com, located in Austin TX. Staff AI Engineer at Tesla (2022 - Present)."
+                    }
+                }
+            },
+            "required": True,
+        }
+    }
 )
-def render_json(
-    resume_data: ResumeData,
+async def render_json(
+    request: Request,
     accent: Optional[str] = Query(None, description="Custom accent hex color, e.g. #1F4E79"),
     size: Optional[str] = Query("A4", description="Page size: A4 or LETTER"),
     pages: int = Query(1, description="Target page count"),
     fill: bool = Query(False, description="Expand spacing for short content"),
     no_fit: bool = Query(False, description="Disable autofit page scaling"),
 ):
-    """Compile JSON resume data directly into a PDF binary stream."""
+    """Compile resume content (JSON, YAML, or freeform text) directly into a PDF binary stream."""
     try:
+        body_bytes = await request.body()
+        raw_text = body_bytes.decode("utf-8").strip()
+
+        # 1. If body is a JSON object with {"content": "..."}, extract content
+        if raw_text.startswith("{") and raw_text.endswith("}"):
+            try:
+                parsed_json = json.loads(raw_text)
+                if isinstance(parsed_json, dict) and "content" in parsed_json and isinstance(parsed_json["content"], str) and parsed_json["content"].strip():
+                    raw_text = parsed_json["content"]
+            except Exception:
+                pass
+        # 2. If body is a JSON-stringified string (double-quoted text), unwrap it
+        elif raw_text.startswith('"') and raw_text.endswith('"'):
+            try:
+                raw_text = json.loads(raw_text)
+            except Exception:
+                pass
+
+        resume_data = parse_and_validate(raw_text, filename="")
         data_dict = resume_data.model_dump()
+
         cfg = _prepare_config(accent=accent, size=size, pages=pages, fill=fill, no_fit=no_fit)
         pdf_bytes, page_count, scale, font_delta = render_to_bytes(data_dict, cfg)
 
-        filename = f"{data_dict.get('header', {}).get('name', 'Resume').replace(' ', '_')}.pdf"
+        name = data_dict.get("header", {}).get("name", "Resume") if isinstance(data_dict.get("header"), dict) else "Resume"
+        filename = f"{name.replace(' ', '_')}.pdf"
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -133,21 +183,15 @@ async def render_file(
     try:
         content_bytes = await file.read()
         raw_text = content_bytes.decode("utf-8")
-        filename_lower = file.filename.lower() if file.filename else ""
 
-        if filename_lower.endswith(".json"):
-            import json
-            data = json.loads(raw_text)
-        elif filename_lower.endswith((".yaml", ".yml")):
-            import yaml
-            data = yaml.safe_load(raw_text)
-        else:
-            data = parse_text(raw_text)
+        resume_data = parse_and_validate(raw_text, file.filename or "")
+        data_dict = resume_data.model_dump()
 
         cfg = _prepare_config(accent=accent, size=size, pages=pages, fill=fill, no_fit=no_fit)
-        pdf_bytes, page_count, scale, font_delta = render_to_bytes(data, cfg)
+        pdf_bytes, page_count, scale, font_delta = render_to_bytes(data_dict, cfg)
 
-        output_name = f"{data.get('header', {}).get('name', 'Resume').replace(' ', '_')}.pdf"
+        name = data_dict.get("header", {}).get("name", "Resume") if isinstance(data_dict.get("header"), dict) else "Resume"
+        output_name = f"{name.replace(' ', '_')}.pdf"
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
