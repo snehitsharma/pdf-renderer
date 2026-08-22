@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 import jwt
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer
 
 SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "default-dev-secret-key-change-in-production")
 ALGORITHM = "HS256"
@@ -13,11 +13,8 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", 
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 
-# OAuth2 scheme pointing to /login endpoint (MUST start with / for Swagger UI)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
-
-# Fallback HTTP Bearer scheme for direct token input in Swagger UI / Clients
-bearer_scheme = HTTPBearer(auto_error=False)
+# OAuth2 scheme pointing to /login endpoint
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
@@ -54,21 +51,6 @@ def verify_credentials(username: str, password: str) -> bool:
     return username == ADMIN_USERNAME and password == ADMIN_PASSWORD
 
 
-def get_current_user(
-    token_oauth2: Optional[str] = Depends(oauth2_scheme),
-    credentials_bearer: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-) -> Dict[str, Any]:
-    """
-    FastAPI dependency that extracts and validates the JWT Bearer token
-    from either OAuth2 scheme or Bearer header.
-    """
-    token = token_oauth2 or (credentials_bearer.credentials if credentials_bearer else None)
-
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated. Please log in via /login or provide a Bearer token.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
+def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
+    
     return decode_access_token(token)
