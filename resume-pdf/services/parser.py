@@ -9,25 +9,41 @@ from pydantic import ValidationError
 from models.resume import ResumeData
 
 
-def load_content_from_text(raw: str, filename: str = ""):
-    """
-    Tries to turn raw text into a dict based on JSON or YAML structure.
-    Returns None if it's unstructured plain text.
-    """
-    low = filename.lower()
+from typing import Any, Dict, Optional
 
-    if low.endswith((".yaml", ".yml")):
-        try:
-            parsed = yaml.safe_load(raw)
-            return parsed if isinstance(parsed, dict) else None
-        except Exception:
-            return None
 
+def _try_json(raw: str) -> Optional[Dict[str, Any]]:
+    """Attempts to parse raw text as a JSON dictionary."""
     try:
         parsed = json.loads(raw)
         return parsed if isinstance(parsed, dict) else None
     except Exception:
         return None
+
+
+def _try_yaml(raw: str) -> Optional[Dict[str, Any]]:
+    """Attempts to parse raw text as a YAML dictionary."""
+    try:
+        parsed = yaml.safe_load(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def load_content_from_text(raw: str, filename: str = "") -> Optional[Dict[str, Any]]:
+
+    low = filename.lower()
+
+    #case 1
+    if low.endswith(".json"):
+        return _try_json(raw)
+
+    #case 2
+    if low.endswith((".yaml", ".yml")):
+        return _try_yaml(raw)
+
+    # Tries JSON first; if that returns None, tries YAML.
+    return _try_json(raw) or _try_yaml(raw)
 
 
 def load_content(path: str):

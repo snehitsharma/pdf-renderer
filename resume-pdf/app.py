@@ -4,8 +4,9 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 
 # Ensure package directory is on sys.path
@@ -20,10 +21,12 @@ try:
 except ImportError:
     pass
 
+from core.auth import create_access_token, get_current_user, verify_credentials
 from core.config import CONFIG
 from models.resume import ResumeData
 from services.parser import parse_and_validate
 from services.renderer import render_to_bytes
+from services.storage import save_pdf_to_disk
 
 app = FastAPI(
     title="Resume PDF Renderer API",
@@ -61,6 +64,22 @@ def _prepare_config(
     return cfg
 
 
+@app.post("/login", tags=["Auth"])
+def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """
+    OAuth2 token login endpoint, directly integrated with Swagger UI's Authorize button.
+    Default credentials: username='admin', password='admin'
+    """
+    if not verify_credentials(form_data.username, form_data.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token = create_access_token(data={"sub": form_data.username})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
 @app.get("/", tags=["Health"])
 def health_check():
     return {
@@ -68,6 +87,7 @@ def health_check():
         "service": "Resume PDF Renderer API",
         "version": "1.0.0",
         "endpoints": {
+            "login": "POST /login",
             "render_json": "POST /render",
             "render_file": "POST /render/file",
             "docs": "/docs",
@@ -85,6 +105,7 @@ def health_check():
             "description": "Returns the generated PDF binary stream.",
         }
     },
+    #remove this and it breaks, no other body to support it, text file would  stay empty
     openapi_extra={
         "requestBody": {
             "content": {
@@ -92,14 +113,14 @@ def health_check():
                     "schema": {
                         "type": "string",
                         "description": "Paste any unquoted raw text, JSON, or YAML resume content here",
-                        "example": "Hey team, here is my background info: Name's David Miller, email david.m@gmail.com, located in Austin TX. Staff AI Engineer at Tesla (2022 - Present)."
+                        "example": "your text here"
                     }
                 },
                 "application/json": {
                     "schema": {
                         "type": "string",
-                        "description": "Paste any unquoted raw text, JSON, or YAML resume content here",
-                        "example": "Hey team, here is my background info: Name's David Miller, email david.m@gmail.com, located in Austin TX. Staff AI Engineer at Tesla (2022 - Present)."
+                        "description": "Paste raw text, JSON, or YAML here",
+                        "example": "your file here"
                     }
                 }
             },
@@ -109,55 +130,53 @@ def health_check():
 )
 async def render_json(
     request: Request,
+    company: Optional[str] = Query(None, description="Company name (defaults to 'General')"),
+    role: Optional[str] = Query(None, description="Role name (defaults to 'Resume')"),
+    output_dir: Optional[str] = Query(None, description="Base folder (defaults to d:/autoCV)"),
     accent: Optional[str] = Query(None, description="Custom accent hex color, e.g. #1F4E79"),
     size: Optional[str] = Query("A4", description="Page size: A4 or LETTER"),
     pages: int = Query(1, description="Target page count"),
     fill: bool = Query(False, description="Expand spacing for short content"),
     no_fit: bool = Query(False, description="Disable autofit page scaling"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """Compile resume content (JSON, YAML, or freeform text) directly into a PDF binary stream."""
-    try:
-        body_bytes = await request.body()
-        raw_text = body_bytes.decode("utf-8").strip()
+    raw_text = (await request.body()).decode("utf-8")
+    resume_data = parse_and_validate(raw_text)
+    
+    cfg = _prepare_config(
+        accent=accent,
+        size=size,
+        pages=pages,
+        fill=fill,
+        no_fit=no_fit,
+    )
 
-        # 1. If body is a JSON object with {"content": "..."}, extract content
-        if raw_text.startswith("{") and raw_text.endswith("}"):
-            try:
-                parsed_json = json.loads(raw_text)
-                if isinstance(parsed_json, dict) and "content" in parsed_json and isinstance(parsed_json["content"], str) and parsed_json["content"].strip():
-                    raw_text = parsed_json["content"]
-            except Exception:
-                pass
-        # 2. If body is a JSON-stringified string (double-quoted text), unwrap it
-        elif raw_text.startswith('"') and raw_text.endswith('"'):
-            try:
-                raw_text = json.loads(raw_text)
-            except Exception:
-                pass
+    pdf_bytes, page_count, scale, font_delta = render_to_bytes(
+        resume_data.model_dump(),
+        cfg,
+    )
 
-        resume_data = parse_and_validate(raw_text, filename="")
-        data_dict = resume_data.model_dump()
+    applicant_name = resume_data.header.name if (resume_data.header and resume_data.header.name) else None
+    file_path, filename = save_pdf_to_disk(
+        pdf_bytes,
+        company=company,
+        role=role,
+        applicant_name=applicant_name,
+        output_dir=output_dir,
+    )
 
-        cfg = _prepare_config(accent=accent, size=size, pages=pages, fill=fill, no_fit=no_fit)
-        pdf_bytes, page_count, scale, font_delta = render_to_bytes(data_dict, cfg)
-
-        name = data_dict.get("header", {}).get("name", "Resume") if isinstance(data_dict.get("header"), dict) else "Resume"
-        filename = f"{name.replace(' ', '_')}.pdf"
-        return Response(
-            content=pdf_bytes,
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "X-Page-Count": str(page_count),
-                "X-Spacing-Scale": f"{scale:.3f}",
-                "X-Font-Delta": f"{font_delta:.2f}",
-            },
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to render PDF: {str(e)}",
-        )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "X-Saved-Path": file_path,
+            "X-Page-Count": str(page_count),
+            "X-Spacing-Scale": f"{scale:.3f}",
+            "X-Font-Delta": f"{font_delta:.2f}",
+        },
+    )
 
 
 @app.post(
@@ -173,11 +192,15 @@ async def render_json(
 )
 async def render_file(
     file: UploadFile = File(..., description="Upload .json, .yaml, or .txt resume content file"),
+    company: Optional[str] = Query(None, description="Company name (defaults to 'General')"),
+    role: Optional[str] = Query(None, description="Role name (defaults to 'Resume')"),
+    output_dir: Optional[str] = Query(None, description="Base folder (defaults to d:/autoCV)"),
     accent: Optional[str] = Query(None, description="Custom accent hex color, e.g. #1F4E79"),
     size: Optional[str] = Query("A4", description="Page size: A4 or LETTER"),
     pages: int = Query(1, description="Target page count"),
     fill: bool = Query(False, description="Expand spacing for short content"),
     no_fit: bool = Query(False, description="Disable autofit page scaling"),
+    current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     """Upload a .json, .yaml, or .txt file over HTTP and compile it into a PDF."""
     try:
@@ -190,13 +213,21 @@ async def render_file(
         cfg = _prepare_config(accent=accent, size=size, pages=pages, fill=fill, no_fit=no_fit)
         pdf_bytes, page_count, scale, font_delta = render_to_bytes(data_dict, cfg)
 
-        name = data_dict.get("header", {}).get("name", "Resume") if isinstance(data_dict.get("header"), dict) else "Resume"
-        output_name = f"{name.replace(' ', '_')}.pdf"
+        applicant_name = resume_data.header.name if (resume_data.header and resume_data.header.name) else None
+        file_path, filename = save_pdf_to_disk(
+            pdf_bytes,
+            company=company,
+            role=role,
+            applicant_name=applicant_name,
+            output_dir=output_dir,
+        )
+
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{output_name}"',
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-Saved-Path": file_path,
                 "X-Page-Count": str(page_count),
                 "X-Spacing-Scale": f"{scale:.3f}",
                 "X-Font-Delta": f"{font_delta:.2f}",
